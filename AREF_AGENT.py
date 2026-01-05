@@ -28,7 +28,6 @@ def generate_with_groq(text_input, mode):
 
     else:  # LECTURE
         instruction = (
-            "You are a university exam question generator. "
             "Generate multiple choice questions strictly based on the provided lecture text only. "
             "Do not use any external knowledge. "
             "Questions must be directly answerable from the lecture text."
@@ -40,14 +39,11 @@ def generate_with_groq(text_input, mode):
         prompt = f"""
 {instruction}
 
-Return ONLY valid JSON in the following format:
-[
-  {{
-    "question": "string",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "exact correct option text"
-  }}
-]
+Return ONLY JSON.
+Each item must have:
+- question
+- options (4 items)
+- answer (exact option text)
 
 Lecture text:
 {chunk}
@@ -68,13 +64,33 @@ Lecture text:
             )
 
             res_json = response.json()
-            content = res_json["choices"][0]["message"]["content"]
+            content = res_json["choices"][0]["message"]["content"].strip()
 
-            match = re.search(r'\[\s*{[\s\S]*?}\s*\]', content)
-            if match:
+            # 🧠 TRY DIRECT JSON
+            try:
+                data = json.loads(content)
+            except:
+                # 🔧 FALLBACK REGEX
+                match = re.search(r'(\[.*\]|\{.*\})', content, re.DOTALL)
+                if not match:
+                    continue
                 data = json.loads(match.group())
-                if isinstance(data, list):
-                    all_results.extend(data)
+
+            # 🧩 NORMALIZE
+            if isinstance(data, dict):
+                data = [data]
+
+            if isinstance(data, list):
+                for q in data:
+                    if (
+                        isinstance(q, dict)
+                        and "question" in q
+                        and "options" in q
+                        and "answer" in q
+                        and isinstance(q["options"], list)
+                        and len(q["options"]) == 4
+                    ):
+                        all_results.append(q)
 
         except:
             continue
@@ -112,13 +128,14 @@ if not st.session_state.questions and not st.session_state.finished:
                 text = fallback_extract_text(file)
 
             questions = generate_with_groq(text, mode)
+
             if questions:
                 st.session_state.questions = questions
                 st.session_state.idx = 0
                 st.session_state.score = 0
                 st.rerun()
             else:
-                st.error("No questions generated. Try another file.")
+                st.error("❌ No questions generated. Check the PDF content.")
 
 elif st.session_state.questions and not st.session_state.finished:
     q = st.session_state.questions[st.session_state.idx]
@@ -144,7 +161,7 @@ elif st.session_state.questions and not st.session_state.finished:
 else:
     total = len(st.session_state.questions)
     score = st.session_state.score
-    st.success(f"Finished 🎉  Score: {score}/{total}")
+    st.success(f"🎉 Finished — Score: {score}/{total}")
 
     if st.button("Restart"):
         st.session_state.clear()
