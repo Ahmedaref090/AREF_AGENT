@@ -12,7 +12,7 @@ GROQ_API_KEY = "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"
 
 def generate_with_groq(text_input, mode):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    safe_text = text_input[:120000].replace('"', "'")
+    safe_text = text_input[:10000].replace('"', "'")
     
     if mode == "Solved Q&A Bank":
         instruction = "Extract questions and their correct answers from this solved bank."
@@ -20,13 +20,11 @@ def generate_with_groq(text_input, mode):
         instruction = "Solve this question bank and provide the correct answers."
     else: 
         instruction = (
-    "You are a university-level subject matter expert and professional exam setter. "
-    "Using ONLY the information explicitly stated in the provided you, "
-    "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs). "
-    "The questions must be factual, concept-based, or application-based, "
-    "and suitable for undergraduate exams. "
-
-
+     "You are a university-level subject matter expert and professional exam setter. "
+     "Using ONLY the information explicitly stated in the provided you, "
+     "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs). "
+     "The questions must be factual, concept-based, or application-based, "
+     "and suitable for undergraduate exams."
         )
 
     prompt = (
@@ -38,16 +36,10 @@ def generate_with_groq(text_input, mode):
     )
     
     payload = {
-    "model": "llama-3.1-70b-instruct",
-    "messages": [
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ],
-    "temperature": 0.2
-}
-
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3 
+    }
     
     try:
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=40)
