@@ -12,7 +12,7 @@ GROQ_API_KEY = "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"
 
 def generate_with_groq(text_input, mode):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    safe_text = text_input[:10000].replace('"', "'")
+    safe_text = text_input[:20000].replace('"', "'")
     
     if mode == "Solved Q&A Bank":
         instruction = "Extract questions and their correct answers from this solved bank."
@@ -20,9 +20,18 @@ def generate_with_groq(text_input, mode):
         instruction = "Solve this question bank and provide the correct answers."
     else: 
         instruction = (
-            "You are an academic expert. Based on the provided lecture text, generate 15 to 20 high-quality MCQs. "
-            "Ensure the questions cover different parts of the text. "
-            "Each question must have 4 clear options and one definitive correct answer."
+    "You are a university-level subject matter expert and professional exam setter. "
+    "Using ONLY the information explicitly stated in the provided lecture text, "
+    "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs). "
+    "The questions must be factual, concept-based, or application-based, "
+    "and suitable for undergraduate exams. "
+    "Do NOT create opinion-based, vague, philosophical, or speculative questions. "
+    "Each question must:\n"
+    "- Be directly answerable from the lecture content\n"
+    "- Have exactly 4 concise options (A, B, C, D)\n"
+    "- Have ONE clearly correct answer\n"
+    "- Avoid tricky wording, ambiguity, or irrelevant details\n"
+    "After each question, clearly specify the correct option."
         )
 
     prompt = (
