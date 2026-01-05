@@ -12,7 +12,7 @@ GROQ_API_KEY = "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"
 
 def generate_with_groq(text_input, mode):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    safe_text = text_input[:120000].replace('"', "'")
+    safe_text = text_input[:12000].replace('"', "'")
     
     if mode == "Solved Q&A Bank":
         instruction = "Extract all and every questions and their correct answers from this solved bank."
@@ -20,9 +20,8 @@ def generate_with_groq(text_input, mode):
         instruction = "Solve all and every this question bank and provide the correct answers."
     else: 
         instruction = (
-     "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs). "
-     "The questions must be factual, concept-based, or application-based, "
-     "and suitable for undergraduate exams." 
+     "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs).based on text  "
+
         )
 
     prompt = (
@@ -36,7 +35,7 @@ def generate_with_groq(text_input, mode):
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2
+        "temperature": 0.3
     }
     
     try:
