@@ -1,6 +1,7 @@
 streamlit
 PyPDF2
 pdfminer.six
-pycryptodome
+pdf2image
+pytesseract
+Pillow
 requests
-
