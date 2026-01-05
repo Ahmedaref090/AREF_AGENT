@@ -6,67 +6,74 @@ import requests
 import re
 from pdfminer.high_level import extract_text as fallback_extract_text
 
+# ================== CONFIG ==================
 GROQ_API_KEY = "PUT_YOUR_KEY_HERE"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# ================== GROQ FUNCTION ==================
 def generate_with_groq(text_input, mode):
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    CHUNK_SIZE = 35000
+    CHUNK_SIZE = 30000
     all_results = []
 
     if mode == "Solved Q&A Bank":
-        instruction = "Extract all and every questions and their correct answers from this solved bank."
+        instruction = "Extract all questions and their correct answers exactly as written."
 
     elif mode == "Unsolved Q&A Bank":
-        instruction = "Solve all and every this question bank and provide the correct answers."
+        instruction = "Solve all questions and provide the correct answers."
 
-    else:  # 🔥 LECTURE (المعدل)
+    else:  # LECTURE
         instruction = (
-            "You are a strict university exam generator. "
-            "Using ONLY the information explicitly stated in the provided lecture text, "
-            "generate multiple choice questions (MCQs). "
-            "Do NOT use any external knowledge, assumptions, or interpretations. "
-            "Do NOT invent examples, scenarios, or applications. "
-            "Every question MUST be directly answerable from the lecture text word-for-word. "
-            "Focus strictly on definitions, stated facts, key concepts, and explanations exactly as written in the lecture."
+            "You are a university exam question generator. "
+            "Generate multiple choice questions strictly based on the provided lecture text only. "
+            "Do not use any external knowledge. "
+            "Questions must be directly answerable from the lecture text."
         )
 
     for i in range(0, len(text_input), CHUNK_SIZE):
-        chunk = text_input[i:i+CHUNK_SIZE].replace('"', "'")
+        chunk = text_input[i:i + CHUNK_SIZE]
 
-        prompt = (
-            f"{instruction} "
-            "IMPORTANT: You MUST return ONLY a valid JSON array. Do not include any introductory or concluding text. "
-            "The 'answer' field MUST contain the exact text of the correct option, not just a letter. "
-            "Format: [{\"question\": \"...\", "
-            "\"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"], "
-            "\"answer\": \"Option A\"}]. "
-            f"Text to analyze: {chunk}"
-        )
+        prompt = f"""
+{instruction}
+
+Return ONLY valid JSON in the following format:
+[
+  {{
+    "question": "string",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": "exact correct option text"
+  }}
+]
+
+Lecture text:
+{chunk}
+"""
 
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.15  # أقل شطحات
+            "temperature": 0.2
         }
 
         try:
             response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                GROQ_URL,
                 headers=headers,
                 json=payload,
-                timeout=40
+                timeout=60
             )
-            res_json = response.json()
 
-            if 'choices' in res_json:
-                content = res_json['choices'][0]['message']['content']
-                match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
+            res_json = response.json()
+            content = res_json["choices"][0]["message"]["content"]
+
+            match = re.search(r'\[\s*{[\s\S]*?}\s*\]', content)
+            if match:
+                data = json.loads(match.group())
+                if isinstance(data, list):
                     all_results.extend(data)
 
         except:
@@ -74,69 +81,71 @@ def generate_with_groq(text_input, mode):
 
     return all_results
 
+# ================== STREAMLIT UI ==================
+st.set_page_config(page_title="AREF AGENT", layout="centered")
+st.title("🧠 AREF AGENT")
 
-# ================= STREAMLIT UI (UNCHANGED) =================
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+    st.session_state.idx = 0
+    st.session_state.score = 0
+    st.session_state.finished = False
 
-st.set_page_config(page_title="AREF AGENT | AI VISION", layout="centered")
+if not st.session_state.questions and not st.session_state.finished:
+    mode = st.radio(
+        "SELECT DATA TYPE:",
+        ["Solved Q&A Bank", "Unsolved Q&A Bank", "Lecture"],
+        index=2
+    )
 
-if 'questions' not in st.session_state:
-    st.session_state.update({
-        'questions': [],
-        'current_idx': 0,
-        'score': 0,
-        'is_finished': False,
-        'answered': False,
-        'status': 'normal',
-        'correct_text_to_show': "",
-        'start_time': None
-    })
+    file = st.file_uploader("UPLOAD PDF FILE", type="pdf")
 
-st.title("AREF AGENT")
-
-if not st.session_state.questions and not st.session_state.is_finished:
-    data_mode = st.radio("SELECT DATA TYPE:", ["Solved Q&A Bank", "Unsolved Q&A Bank", "Lecture"], index=2)
-    file = st.file_uploader("UPLOAD SYSTEM DATA (PDF)", type="pdf")
-
-    if file and st.button("ACTIVATE NEURAL LINK"):
-        with st.spinner("🧬 ANALYZING DATA..."):
+    if file and st.button("PROCESS"):
+        with st.spinner("Processing PDF..."):
             try:
                 reader = PyPDF2.PdfReader(file)
-                full_text = "".join([p.extract_text() for p in reader.pages])
-                if not full_text.strip():
-                    raise Exception("Empty")
+                text = "".join(p.extract_text() or "" for p in reader.pages)
+                if not text.strip():
+                    raise Exception()
             except:
                 file.seek(0)
-                full_text = fallback_extract_text(file)
+                text = fallback_extract_text(file)
 
-            data = generate_with_groq(full_text, data_mode)
-            if data:
-                st.session_state.questions = data
-                st.session_state.start_time = time.time()
+            questions = generate_with_groq(text, mode)
+            if questions:
+                st.session_state.questions = questions
+                st.session_state.idx = 0
+                st.session_state.score = 0
                 st.rerun()
+            else:
+                st.error("No questions generated. Try another file.")
 
-elif st.session_state.questions and not st.session_state.is_finished:
-    idx = st.session_state.current_idx
-    q = st.session_state.questions[idx]
+elif st.session_state.questions and not st.session_state.finished:
+    q = st.session_state.questions[st.session_state.idx]
 
-    st.subheader(f"QUESTION {idx+1}")
-    st.write(q['question'])
+    st.subheader(f"Question {st.session_state.idx + 1}")
+    st.write(q["question"])
 
-    choice = st.radio("SELECT RESPONSE:", q['options'], key=f"q_{idx}")
+    choice = st.radio("Choose answer:", q["options"], key=st.session_state.idx)
 
-    if st.button("VERIFY DATA"):
-        if choice == q['answer']:
+    if st.button("Submit"):
+        if choice == q["answer"]:
             st.session_state.score += 1
-            st.success("SUCCESS ✅")
+            st.success("Correct ✅")
         else:
-            st.error(f"CORRECT ANSWER: {q['answer']}")
+            st.error(f"Correct answer: {q['answer']}")
 
-        if st.button("NEXT ➡️"):
-            st.session_state.current_idx += 1
-            if st.session_state.current_idx >= len(st.session_state.questions):
-                st.session_state.is_finished = True
+        if st.button("Next"):
+            st.session_state.idx += 1
+            if st.session_state.idx >= len(st.session_state.questions):
+                st.session_state.finished = True
             st.rerun()
 
 else:
-    score = st.session_state.score
     total = len(st.session_state.questions)
-    st.success(f"MISSION COMPLETE — SCORE: {score}/{total}")
+    score = st.session_state.score
+    st.success(f"Finished 🎉  Score: {score}/{total}")
+
+    if st.button("Restart"):
+        st.session_state.clear()
+        st.rerun()
