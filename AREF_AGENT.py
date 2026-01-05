@@ -4,11 +4,62 @@ import json
 import time
 import requests
 import re
+import io
 
-# استيراد مكتبة إضافية للتعامل مع الحالات الصعبة للـ PDF
+# استيراد المكتبات للتعامل مع PDF والصور
 from pdfminer.high_level import extract_text as fallback_extract_text
+from pdf2image import convert_from_bytes
+import pytesseract
+from PIL import Image
 
 GROQ_API_KEY = "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"
+
+def extract_text_from_pdf(file):
+    """استخراج النص من PDF بثلاث طرق مختلفة"""
+    
+    # إعادة تعيين مؤشر الملف
+    file.seek(0)
+    
+    # الطريقة 1: PyPDF2
+    try:
+        reader = PyPDF2.PdfReader(file)
+        text = "".join([page.extract_text() or "" for page in reader.pages])
+        if text.strip() and len(text.strip()) > 100:
+            return text, "PyPDF2"
+    except Exception as e:
+        st.warning(f"⚠️ PyPDF2 failed: {str(e)}")
+    
+    # الطريقة 2: pdfminer
+    try:
+        file.seek(0)
+        text = fallback_extract_text(file)
+        if text.strip() and len(text.strip()) > 100:
+            return text, "pdfminer"
+    except Exception as e:
+        st.warning(f"⚠️ pdfminer failed: {str(e)}")
+    
+    # الطريقة 3: OCR (للملفات الممسوحة ضوئياً)
+    try:
+        file.seek(0)
+        st.info("📷 Detected scanned PDF. Using OCR (this may take a moment)...")
+        
+        # تحويل PDF إلى صور
+        images = convert_from_bytes(file.read(), dpi=200)
+        
+        # استخراج النص من كل صورة
+        text = ""
+        for i, image in enumerate(images):
+            st.info(f"🔍 Processing page {i+1}/{len(images)}...")
+            page_text = pytesseract.image_to_string(image, lang='eng+ara')
+            text += page_text + "\n\n"
+        
+        if text.strip() and len(text.strip()) > 100:
+            return text, "OCR"
+    except Exception as e:
+        st.error(f"❌ OCR failed: {str(e)}")
+        st.info("💡 Make sure Tesseract OCR is installed on your system")
+    
+    return "", "Failed"
 
 def generate_with_groq(text_input, mode):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -43,7 +94,6 @@ def generate_with_groq(text_input, mode):
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=60)
         res_json = response.json()
         
-        # التحقق من وجود أخطاء في الاستجابة
         if 'error' in res_json:
             st.error(f"❌ API Error: {res_json['error'].get('message', 'Unknown error')}")
             return []
@@ -53,7 +103,6 @@ def generate_with_groq(text_input, mode):
             match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if match:
                 parsed_data = json.loads(match.group(0))
-                # التحقق من أن البيانات ليست فارغة
                 if len(parsed_data) > 0:
                     return parsed_data
                 else:
@@ -106,21 +155,26 @@ if not st.session_state.questions and not st.session_state.is_finished:
     
     if file and st.button("ACTIVATE NEURAL LINK"):
         with st.spinner("🧬 ANALYZING DATA..."):
-            try:
-                # المحاولة الأولى باستخدام PyPDF2
-                reader = PyPDF2.PdfReader(file)
-                full_text = "".join([p.extract_text() for p in reader.pages])
-                if not full_text.strip(): raise Exception("Empty text")
-            except:
-                # المحاولة الاحتياطية (Fallback) باستخدام pdfminer
-                file.seek(0)
-                full_text = fallback_extract_text(file)
-
-            # التحقق من أن النص ليس فارغًا أو قصيرًا جدًا
+            # استخراج النص باستخدام طرق متعددة
+            full_text, method = extract_text_from_pdf(file)
+            
             if not full_text or len(full_text.strip()) < 50:
-                st.error("❌ FILE ERROR: Extracted text is too short or empty. Please upload a valid PDF with readable content.")
+                st.error("❌ FILE ERROR: Could not extract readable text from PDF.")
+                st.info("💡 Possible solutions:")
+                st.markdown("""
+                - Make sure the PDF contains actual text (not just images)
+                - Try a different PDF file
+                - If it's a scanned document, make sure Tesseract OCR is installed
+                - Check that the file is not corrupted or password-protected
+                """)
             else:
-                st.info(f"📄 Extracted {len(full_text)} characters. Processing...")
+                st.success(f"✅ Text extracted using **{method}** ({len(full_text)} characters)")
+                
+                # عرض أول 500 حرف من النص المستخرج للتأكد
+                with st.expander("📄 Preview extracted text"):
+                    st.text(full_text[:500] + "..." if len(full_text) > 500 else full_text)
+                
+                st.info("🤖 Generating questions...")
                 data = generate_with_groq(full_text, data_mode)
                 
                 if data and len(data) > 0:
@@ -130,7 +184,8 @@ if not st.session_state.questions and not st.session_state.is_finished:
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.error("❌ GENERATION FAILED: Could not generate questions. The text might be too short, unclear, or API limit reached. Try a larger/clearer PDF.")
+                    st.error("❌ GENERATION FAILED: Could not generate questions.")
+                    st.info("The extracted text might not contain enough information for question generation.")
 
 elif st.session_state.questions and not st.session_state.is_finished:
     idx = st.session_state.current_idx
