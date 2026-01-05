@@ -40,15 +40,34 @@ def generate_with_groq(text_input, mode):
     }
     
     try:
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=40)
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=60)
         res_json = response.json()
+        
+        # التحقق من وجود أخطاء في الاستجابة
+        if 'error' in res_json:
+            st.error(f"❌ API Error: {res_json['error'].get('message', 'Unknown error')}")
+            return []
+            
         if 'choices' in res_json:
             content = res_json['choices'][0]['message']['content'].strip()
             match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
             if match:
-                return json.loads(match.group(0))
+                parsed_data = json.loads(match.group(0))
+                # التحقق من أن البيانات ليست فارغة
+                if len(parsed_data) > 0:
+                    return parsed_data
+                else:
+                    st.warning("⚠️ No questions generated. Text may be too short.")
+                    return []
+        return []
+    except requests.exceptions.Timeout:
+        st.error("⏱️ Request timeout. Please try again.")
+        return []
+    except json.JSONDecodeError:
+        st.error("❌ Failed to parse API response. Invalid JSON format.")
         return []
     except Exception as e:
+        st.error(f"❌ Error: {str(e)}")
         return []
 
 st.set_page_config(page_title="AREF AGENT | AI VISION", layout="centered")
@@ -97,11 +116,21 @@ if not st.session_state.questions and not st.session_state.is_finished:
                 file.seek(0)
                 full_text = fallback_extract_text(file)
 
-            data = generate_with_groq(full_text, data_mode)
-            if data:
-                st.session_state.questions = data
-                st.session_state.start_time = time.time()
-                st.rerun()
+            # التحقق من أن النص ليس فارغًا أو قصيرًا جدًا
+            if not full_text or len(full_text.strip()) < 50:
+                st.error("❌ FILE ERROR: Extracted text is too short or empty. Please upload a valid PDF with readable content.")
+            else:
+                st.info(f"📄 Extracted {len(full_text)} characters. Processing...")
+                data = generate_with_groq(full_text, data_mode)
+                
+                if data and len(data) > 0:
+                    st.session_state.questions = data
+                    st.session_state.start_time = time.time()
+                    st.success(f"✅ Successfully generated {len(data)} questions!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ GENERATION FAILED: Could not generate questions. The text might be too short, unclear, or API limit reached. Try a larger/clearer PDF.")
 
 elif st.session_state.questions and not st.session_state.is_finished:
     idx = st.session_state.current_idx
@@ -153,7 +182,6 @@ elif st.session_state.questions and not st.session_state.is_finished:
     with c2:
         if st.session_state.answered:
             if st.session_state.status == 'wrong':
-                # هنا تم التعديل لعرض نص الإجابة بالكامل
                 st.error(f"CORRECT RESPONSE: {st.session_state.correct_text_to_show}")
             else:
                 st.success("SUCCESS ✅")
