@@ -2,107 +2,54 @@ import streamlit as st
 import PyPDF2
 import json
 import time
+import requests
 import re
-import io
 
-# استيراد pdfminer
-try:
-    from pdfminer.high_level import extract_text as fallback_extract_text
-except ImportError:
-    fallback_extract_text = None
+# استيراد مكتبة إضافية للتعامل مع الحالات الصعبة للـ PDF
+from pdfminer.high_level import extract_text as fallback_extract_text
 
-def extract_text_from_pdf(file):
-    """استخراج النص من PDF بطريقتين"""
-    file.seek(0)
-    
-    # الطريقة 1: PyPDF2
-    try:
-        reader = PyPDF2.PdfReader(file)
-        text = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n\n"
-        
-        if text.strip() and len(text.strip()) > 100:
-            return text.strip(), "PyPDF2", len(reader.pages)
-    except Exception as e:
-        st.warning(f"⚠️ PyPDF2 issue: {str(e)[:100]}")
-    
-    # الطريقة 2: pdfminer
-    if fallback_extract_text:
-        try:
-            file.seek(0)
-            text = fallback_extract_text(file)
-            if text.strip() and len(text.strip()) > 100:
-                file.seek(0)
-                reader = PyPDF2.PdfReader(file)
-                return text.strip(), "pdfminer", len(reader.pages)
-        except Exception as e:
-            st.warning(f"⚠️ pdfminer issue: {str(e)[:100]}")
-    
-    file.seek(0)
-    try:
-        reader = PyPDF2.PdfReader(file)
-        return "", "Failed", len(reader.pages)
-    except:
-        return "", "Failed", 0
+GROQ_API_KEY = "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"
 
-async def generate_with_claude(text_input, mode):
-    """توليد الأسئلة باستخدام Claude API"""
-    
-    safe_text = text_input[:100000].replace('"', "'").strip()
+def generate_with_groq(text_input, mode):
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    safe_text = text_input[:120000].replace('"', "'")
     
     if mode == "Solved Q&A Bank":
-        instruction = "Extract all questions and their correct answers from this solved bank."
+        instruction = "Extract all and every questions and their correct answers from this solved bank."
     elif mode == "Unsolved Q&A Bank":
-        instruction = "Solve all questions in this question bank and provide the correct answers."
+        instruction = "Solve all and every this question bank and provide the correct answers."
     else: 
-        instruction = "Generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs) based on this content."
+        instruction = (
+     "generate 15 to 20 clear, exam-oriented multiple choice questions (MCQs). "
+     "The questions must be factual, concept-based, or application-based, "
+     "and suitable for undergraduate exams." 
+        )
+
+    prompt = (
+        f"{instruction} "
+        "IMPORTANT: You MUST return ONLY a valid JSON array. Do not include any introductory or concluding text. "
+        "The 'answer' field MUST contain the exact text of the correct option, not just a letter. "
+        "Format: [{\"question\": \"...\", \"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"], \"answer\": \"Option A\"}]. "
+        f"Text to analyze: {safe_text}"
+    )
     
-    prompt = f"""{instruction}
-
-CRITICAL INSTRUCTIONS:
-1. Return ONLY a valid JSON array - no introduction, no explanation, no markdown
-2. Each question must have exactly 4 options
-3. The 'answer' field must contain the FULL TEXT of the correct option, not just a letter
-4. Format: [{{"question": "...", "options": ["Option A", "Option B", "Option C", "Option D"], "answer": "Option A"}}]
-
-Content to analyze:
-{safe_text[:50000]}"""
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2
+    }
     
     try:
-        response = await fetch("https://api.anthropic.com/v1/messages", {{
-            method: "POST",
-            headers: {{
-                "Content-Type": "application/json",
-            }},
-            body: JSON.stringify({{
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 4000,
-                messages: [
-                    {{ role: "user", content: prompt }}
-                ]
-            }})
-        }})
-        
-        data = await response.json()
-        
-        if data.content && data.content.length > 0:
-            let content = data.content[0].text.trim()
-            
-            // استخراج JSON من الرد
-            let match = content.match(/\[[\s\S]*\]/)
-            if (match) {
-                return JSON.parse(match[0])
-            }
-        }
-        
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=40)
+        res_json = response.json()
+        if 'choices' in res_json:
+            content = res_json['choices'][0]['message']['content'].strip()
+            match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
         return []
-    } catch (error) {
-        console.error("Claude API Error:", error)
+    except Exception as e:
         return []
-    }
 
 st.set_page_config(page_title="AREF AGENT | AI VISION", layout="centered")
 
@@ -135,38 +82,26 @@ if 'questions' not in st.session_state:
 st.markdown('<h1 class="neon-title">AREF AGENT</h1>', unsafe_allow_html=True)
 
 if not st.session_state.questions and not st.session_state.is_finished:
-    st.info("⚠️ **Note**: Groq API limit reached. Using Claude API instead (better quality!)")
-    
     data_mode = st.radio("SELECT DATA TYPE:", ["Solved Q&A Bank", "Unsolved Q&A Bank", "Lecture"], index=2)
     file = st.file_uploader("UPLOAD SYSTEM DATA (PDF)", type="pdf")
     
     if file and st.button("ACTIVATE NEURAL LINK"):
         with st.spinner("🧬 ANALYZING DATA..."):
-            full_text, method, num_pages = extract_text_from_pdf(file)
-            
-            if not full_text or len(full_text.strip()) < 50:
-                st.error("❌ FILE ERROR: Could not extract readable text from PDF.")
-                st.info(f"📄 PDF Info: {num_pages} pages detected")
-                st.markdown("""
-                ### 💡 Possible solutions:
-                - **Scanned PDF** - Use text-based PDF instead
-                - **Password protected** - Remove protection
-                - **Corrupted file** - Try another PDF
-                """)
-            else:
-                st.success(f"✅ Text extracted using **{method}** ({len(full_text)} chars from {num_pages} pages)")
-                
-                with st.expander("📄 Preview extracted text"):
-                    st.text(full_text[:300].replace('\n', ' ') + "...")
-                
-                st.info("🤖 Generating questions with Claude AI...")
-                
-                # هنا المفروض يستدعي Claude API
-                # لكن Streamlit مش بيدعم async بشكل مباشر
-                # هنحتاج نستخدم HTML/React artifact بدلاً من Streamlit
-                
-                st.warning("⚠️ To use Claude API, we need to convert this to a web app (HTML/React).")
-                st.info("Would you like me to create an HTML version that works with Claude API?")
+            try:
+                # المحاولة الأولى باستخدام PyPDF2
+                reader = PyPDF2.PdfReader(file)
+                full_text = "".join([p.extract_text() for p in reader.pages])
+                if not full_text.strip(): raise Exception("Empty text")
+            except:
+                # المحاولة الاحتياطية (Fallback) باستخدام pdfminer
+                file.seek(0)
+                full_text = fallback_extract_text(file)
+
+            data = generate_with_groq(full_text, data_mode)
+            if data:
+                st.session_state.questions = data
+                st.session_state.start_time = time.time()
+                st.rerun()
 
 elif st.session_state.questions and not st.session_state.is_finished:
     idx = st.session_state.current_idx
@@ -218,7 +153,8 @@ elif st.session_state.questions and not st.session_state.is_finished:
     with c2:
         if st.session_state.answered:
             if st.session_state.status == 'wrong':
-                st.error(f"CORRECT: {st.session_state.correct_text_to_show}")
+                # هنا تم التعديل لعرض نص الإجابة بالكامل
+                st.error(f"CORRECT RESPONSE: {st.session_state.correct_text_to_show}")
             else:
                 st.success("SUCCESS ✅")
 
@@ -252,11 +188,11 @@ else:
     
     if score == total_questions:
         st.snow()
-        st.success("GOD MODE ACTIVATED 😂 🦾")
-    elif score >= int(total_questions/2):
-        st.warning("PASS ✓ - ارجع بصمج تاني 😂")
+        st.success("GOD MODE: ACTIVATED 😂 🦾 تمت البصمجه بنجاح !")
+    elif score >= int((total_questions)/2) :
+        st.warning("AGENT RANK: F (SYSTEM FAILURE) - 😂 ارجع بصمج تاني ")
     else:
-        st.warning("FAIL ✗ - قوم ذاكر 😂")
+        st.warning("AGENT RANK: F (SYSTEM FAILURE) - 😂 قوم ذاكر علشان كدا هتسقط ")
                 
     if st.button("REBOOT SYSTEM", use_container_width=True):
         st.session_state.clear()
